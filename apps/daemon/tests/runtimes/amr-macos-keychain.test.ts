@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import * as fs from 'node:fs';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
@@ -6,6 +7,11 @@ import { expect, test, vi } from 'vitest';
 
 import { spawnEnvForAgent } from '../../src/runtimes/env.js';
 import { buildAmrMacKeychainLauncher, prepareAmrMacKeychainLauncher } from '../../src/runtimes/amr-macos-keychain.js';
+
+// Keep named filesystem imports mockable for preparation-failure coverage.
+vi.mock('node:fs', async (importOriginal) => ({
+  ...await importOriginal<typeof import('node:fs')>(),
+}));
 
 const macTest = process.platform === 'darwin' ? test : test.skip;
 
@@ -182,6 +188,33 @@ test('launcher preparation writes an executable under the supplied data root wit
     expect(prepareAmrMacKeychainLauncher(env, '/bin/opencode', options)).toBe(launcher);
     expect(env).toEqual({ HOME: '/host', OD_DATA_DIR: root, AMR_HOME: '~/custom-amr' });
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test.each([
+  ['mkdirSync', 'EACCES'],
+  ['writeFileSync', 'ENOSPC'],
+  ['chmodSync', 'EPERM'],
+] as const)('launcher preparation falls back to the selected companion when %s fails', (operation, code) => {
+  const root = mkdtempSync(path.join(tmpdir(), 'od-amr-keychain-prepare-failure-'));
+  const env = { HOME: '/host', OD_DATA_DIR: root, AMR_HOME: '~/custom-amr' };
+  const failure = Object.assign(new Error(`${code}: launcher storage unavailable`), { code });
+  const diagnostic = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  const fault = vi.spyOn(fs, operation).mockImplementationOnce(() => { throw failure; });
+  try {
+    expect(prepareAmrMacKeychainLauncher(env, '/selected/opencode', {
+      platform: 'darwin', findDefaultKeychain: () => '/host/login.keychain-db',
+    })).toBe('/selected/opencode');
+    expect(fault).toHaveBeenCalledOnce();
+    expect(diagnostic).toHaveBeenCalledExactlyOnceWith(
+      'OpenDesign: could not prepare the AMR macOS keychain launcher; using the selected companion:',
+      failure.message,
+    );
+    expect(env).toEqual({ HOME: '/host', OD_DATA_DIR: root, AMR_HOME: '~/custom-amr' });
+  } finally {
+    fault.mockRestore();
+    diagnostic.mockRestore();
     rmSync(root, { recursive: true, force: true });
   }
 });

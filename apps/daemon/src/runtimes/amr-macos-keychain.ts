@@ -86,14 +86,22 @@ export function prepareAmrMacKeychainLauncher(
   const id = createHash('sha256').update(script).digest('hex').slice(0, 16);
   const directory = path.join(dataDir, 'amr', 'launchers');
   const launcher = path.join(directory, `opencode-macos-keychain-${id}`);
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
-  let previous: string | null = null;
   try {
-    previous = readFileSync(launcher, 'utf8');
-  } catch {
-    // First launch for this selected companion/keychain pair.
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    let previous: string | null = null;
+    try {
+      previous = readFileSync(launcher, 'utf8');
+    } catch {
+      // First launch for this selected companion/keychain pair.
+    }
+    if (previous !== script) writeFileSync(launcher, script, { mode: 0o700 });
+    chmodSync(launcher, 0o700);
+    return launcher;
+  } catch (error) {
+    console.warn(
+      'OpenDesign: could not prepare the AMR macOS keychain launcher; using the selected companion:',
+      error instanceof Error ? error.message : String(error),
+    );
+    return opencodeBin;
   }
-  if (previous !== script) writeFileSync(launcher, script, { mode: 0o700 });
-  chmodSync(launcher, 0o700);
-  return launcher;
 }
